@@ -71,6 +71,7 @@ void AudioThread::run()
     d.init();
     //TODO: bool need_sync in private class
     bool is_external_clock = d.clock->clockType() == AVClock::ExternalClock;
+    ulong last_wait = 0; //ms
     Packet pkt;
     while (!d.stop) {
         processNextTask();
@@ -97,24 +98,50 @@ void AudioThread::run()
             dec->flush();
             continue;
         }
-        bool skip_render = pkt.pts < d.render_pts0;
+        bool skip_render = pkt.pts < (d.render_pts0 - 0.040); //40 ms: about 1 frame
         // audio has no key frame, skip rendering equals to skip decoding
         if (skip_render) {
-            d.clock->updateValue(pkt.pts);
+            //qDebug("skip_render at %f/%f v=%f last_wait=%lu", pkt.pts, d.render_pts0, d.clock->videoPts(), last_wait);
+            if (!is_external_clock)
+                d.clock->updateValue(pkt.pts);
             /*
              * audio may be too fast than video if skip without sleep
              * a frame is about 20ms. sleep time must be << frame time
              */
             qreal a_v = pkt.pts - d.clock->videoPts();
-
-            //qDebug("skip audio decode at %f/%f v=%f a-v=%f", pkt.pts, d.render_pts0, d.clock->videoPts(), a_v);
-            if (a_v > 0)
-                msleep(qMin((ulong)300, ulong(a_v*1000.0)));
-            else
-                msleep(2);
+            const ulong kWaitInterval = 10;
+#if 1
+            if (a_v > 0.0 && (ulong)(a_v*1000) > last_wait) {
+                //qDebug("skip audio decode at %f/%f v=%f a-v=%f", pkt.pts, d.render_pts0, d.clock->videoPts(), a_v);
+                if (a_v*1000 > kWaitInterval) {
+                    msleep(kWaitInterval);
+                    last_wait = a_v*1000 - kWaitInterval;
+                    //a_v = qMin(pkt.pts - d.clock->videoPts(), a_v);
+                } else if (a_v > 0.4){
+                    //qDebug("sleep %lu ms", kWaitInterval);
+                    msleep(kWaitInterval);
+                } else {
+                    //qDebug("sleep a_v ms");
+                    msleep(a_v);
+                }
+            } else {
+                if (a_v > 0.0 && last_wait > 0) {
+                    //qDebug("msleep last_wait: %lu", last_wait);
+                    last_wait /= 2;
+                    if (last_wait > 400)
+                        msleep(kWaitInterval);
+                    else
+                        msleep(last_wait);
+                }
+            }
+#else
+            msleep(kWaitInterval);
+#endif
+            //msleep(kWaitInterval);
             pkt = Packet(); //mark invalid to take next
             continue;
         }
+        last_wait = 0;
         d.render_pts0 = 0;
         if (is_external_clock) {
             d.delay = pkt.pts - d.clock->value();
@@ -130,7 +157,7 @@ void AudioThread::run()
                 }
                 while (d.delay > kSyncThreshold) { //Slow down
                     //d.delay_cond.wait(&d.mutex, d.delay*1000); //replay may fail. why?
-                    //qDebug("~~~~~wating for %f msecs", d.delay*1000);
+                    //qDebug("~~~~~a wating for %f msecs", d.delay*1000);
                     usleep(kSyncThreshold * 1000000UL);
                     if (d.stop)
                         d.delay = 0;
@@ -141,6 +168,7 @@ void AudioThread::run()
                     usleep(d.delay * 1000000UL);
             } else { //when to drop off?
                 if (d.delay > 0) {
+                    //qDebug("~~~~~wating for fixed %f msecs", 64);
                     msleep(64);
                 } else {
                     //audio packet not cleaned up?

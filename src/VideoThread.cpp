@@ -221,7 +221,7 @@ void VideoThread::run()
                 //continue;
             }
         } else if (qFuzzyIsNull(d.render_pts0)){ //when to drop off?
-            qDebug("delay %f/%f", d.delay, d.clock->value());
+            //qDebug("delay %f/%f", d.delay, d.clock->value());
             if (d.delay < 0) {
                 if (!pkt.hasKeyFrame) {
                     // if continue without decoding, we must wait to the next key frame, then we may skip to many frames
@@ -236,12 +236,13 @@ void VideoThread::run()
         if (d.delay < 3 && qFuzzyIsNull(d.render_pts0)) {
             while (d.delay > kSyncThreshold) { //Slow down
                 //d.delay_cond.wait(&d.mutex, d.delay*1000); //replay may fail. why?
-                //qDebug("~~~~~wating for %f msecs", d.delay*1000);
+                //qDebug("~~~~~v wating for %f msecs", d.delay*1000);
                 usleep(kSyncThreshold * 1000000UL);
                 if (d.stop)
                     d.delay = 0;
                 else
                     d.delay -= kSyncThreshold;
+                d.delay = qMin(d.delay, pts - d.clock->value());
             }
             if (d.delay > 0)
                 usleep(d.delay * 1000000UL);
@@ -251,8 +252,10 @@ void VideoThread::run()
                 break;
             }
         } else if (qFuzzyIsNull(d.render_pts0)) {
-            if (d.delay > 0)
+            if (d.delay > 0) {
+                //qDebug("sleep 40ms");
                 msleep(40);
+            }
         }
         if (wait_key_frame) {
             if (pkt.hasKeyFrame)
